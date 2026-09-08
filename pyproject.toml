@@ -1,0 +1,31 @@
+[project]
+name = "cxmcp"
+version = "0.1.0"
+description = "超星学习通 MCP server（教师版 / 学生版双入口，纯 HTTP 协议模拟，无浏览器依赖）"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "cxmcp" }]
+dependencies = [
+    "mcp>=2.1,<3",
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+    "pycryptodome>=3.20",
+]
+
+[project.scripts]
+cx-mcp-teacher = "cxmcp.cli:main_teacher"
+cx-mcp-student = "cxmcp.cli:main_student"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
