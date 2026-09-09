@@ -1,12 +1,14 @@
 """课程主页菜单 + 章节/任务点。
 
 课程主页: https://mooc1-2.chaoxing.com/visit/stucoursemiddle?courseid=&clazzid=&vc=1&cpi=
+  （会 302 到 /mooc-ans/mycourse/studentcourse）
 菜单项: ul.navshow > li > a；很多真实 URL 藏在 <a data="..."> 属性里。
-章节: 菜单里的 /knowledge/ 或 /chapter/ 链接，卡片节点页解析章节树。
+章节树: 主页 `<div class="timeline">` 容器，服务端渲染；容器为空 = 尚未发布章节。
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 from urllib.parse import urljoin
@@ -15,6 +17,8 @@ from bs4 import BeautifulSoup
 
 from ..exceptions import UpstreamChanged
 from ..session import ChaoxingSession
+
+log = logging.getLogger("cxmcp.chapters")
 
 MOOC1_2 = "https://mooc1-2.chaoxing.com"
 
@@ -92,34 +96,117 @@ def find_menu_url(sess: ChaoxingSession, course: dict[str, Any], keyword: str) -
 
 
 # ------------------------------------------------------------------ 章节
-def list_chapters(sess: ChaoxingSession, course: dict[str, Any]) -> list[dict[str, Any]]:
-    """解析章节树（尽力而为）。
+_LEVEL_CLASSES = {"levelone": 1, "leveltwo": 2, "levelthree": 3, "unit": 1}
 
-    已知限制（2026-09 实机）：新版课程模板的章节树由 JS 动态加载
-    （studentcourse SPA），纯 HTTP 无法直接拿到；此时会返回带指引的错误，
-    需要逆向其 AJAX 端点后扩展本函数。
+
+def parse_chapter_tree(node, base_url: str = "") -> list[dict[str, Any]]:
+    """解析章节树容器（`.timeline`），返回带层级的扁平列表。
+
+    实机形态（2026-09 校准，mooc-ans/mycourse/studentcourse 页服务端渲染）::
+
+        <div class="timeline">
+          <!-- 第一级开始 -->
+          <div class="levelone units"><h3 class="clearfix">
+            <a href="javascript:;"><span class="articlename" title="第一章 概述">…</span></a></h3>
+            <div class="leveltwo"><h3 class="clearfix">
+              <a href="/mooc-ans/mycourse/studentstudy?chapterId=111&courseId=…">
+                <span class="chapterNumber">1.1</span>
+                <span class="articlename" title="网络定义">网络定义</span></a>
+              <em class="orange">3</em></h3>
+              <div class="levelthree"><h3>…</h3></div>
+            </div>
+          </div>
+          <!-- 第一级结束 -->
+        </div>
+
+    容器为空（只剩注释）即『老师还没发布章节』，返回 []，不是解析失败。
     """
-    # 形态 0（2026-09 新版实机）：课程主页(重定向后的 studentcourse 页)
-    # 直接内嵌完整章节树，无需等 JS：
-    #   <div class="leveltwo"><h3 class="clearfix"><a href='/mooc-ans/mycourse/studentstudy?chapterId=...'>
-    #     <span class="chapterNumber">1.1</span><span class="articlename" title="新建目录">新建目录</span>
+    soup = node if hasattr(node, "find_all") else BeautifulSoup(str(node), "html.parser")
+    root = soup.select_one(".timeline") or soup
+    out: list[dict[str, Any]] = []
+    unit = ""
+
+    for h3 in root.find_all("h3"):
+        # 最近的带 level* 类的祖先决定层级（leveltwo 嵌在 levelone 里，必须取最近的）
+        level = 0
+        parent = h3.parent
+        while parent is not None and parent is not root:
+            for cls in parent.get("class") or []:
+                if cls in _LEVEL_CLASSES:
+                    level = _LEVEL_CLASSES[cls]
+                    break
+            if level:
+                break
+            parent = parent.parent
+
+        link = h3.find("a")
+        if link is None:
+            continue
+        name_el = h3.select_one(".articlename")
+        name = ""
+        if name_el is not None:
+            name = (name_el.get("title") or name_el.get_text(" ", strip=True) or "").strip()
+        if not name:
+            name = link.get_text(" ", strip=True)
+        name = re.sub(r"\s+", " ", name).strip()
+        if not name:
+            continue
+
+        num_el = h3.select_one(".chapterNumber")
+        number = num_el.get_text(strip=True) if num_el is not None else ""
+        href = (link.get("href") or "").strip()
+        if href.startswith(("javascript:", "#")):
+            href = ""
+        chapter_id = None
+        m = re.search(r"chapter[iI]d=(\d+)", href)
+        if m:
+            chapter_id = int(m.group(1))
+        task_el = h3.select_one(".orange, .knowledgeJobCount")
+        try:
+            task_count = int(task_el.get_text(strip=True)) if task_el is not None else None
+        except (TypeError, ValueError):
+            task_count = None
+
+        if not level:
+            level = 2  # 容器类名缺失时按章节处理，不至于把整棵树丢掉
+
+        if level == 1:
+            unit = name
+        out.append(
+            {
+                "title": f"{number} {name}".strip()[:120],
+                "level": level,
+                "unit": unit,
+                "chapterId": chapter_id,
+                "url": urljoin(base_url, href) if href else "",
+                "taskCount": task_count,
+            }
+        )
+    return out
+
+
+def list_chapters(sess: ChaoxingSession, course: dict[str, Any]) -> list[dict[str, Any]]:
+    """解析章节树。
+
+    2026-09 实机校准：章节**是服务端渲染**在课程主页（stucoursemiddle 会 302 到
+    `/mooc-ans/mycourse/studentcourse`）的 `<div class="timeline">` 容器里的，
+    并不依赖前端 JS 二次拉取。此前"章节由 JS 动态加载、纯 HTTP 拿不到"的结论是错的——
+    真实情况是该容器为空（`<!-- 第一级开始 --><!-- 第一级结束 -->`），
+    即老师尚未发布章节，应当返回空列表而不是报错。
+    """
+    # 形态 0（新版实机）：课程主页内嵌 .timeline 章节树
     try:
         home = sess.get(course_home_url(course))
-        tree_soup = BeautifulSoup(home.text, "html.parser")
-        chapters = []
-        for node in tree_soup.select("div.leveltwo h3.clearfix a[href*='chapterId='], h3.clearfix a[href*='chapterId=']"):
-            href = node.get("href") or ""
-            num_el = node.select_one(".chapterNumber")
-            name_el = node.select_one(".articlename")
-            num = num_el.get_text(strip=True) if num_el else ""
-            name = (name_el.get("title") or name_el.get_text(" ", strip=True) or "").strip()
-            if name:
-                url_final = urljoin(str(home.url), href)
-                chapters.append({"title": f"{num} {name}".strip()[:120], "url": url_final})
-        if chapters:
-            return chapters
-    except Exception:  # noqa: BLE001 - 形态 0 失败则回退旧逻辑
-        pass
+        soup = BeautifulSoup(home.text, "html.parser")
+        timeline = soup.select_one(".timeline")
+        if timeline is not None:
+            chapters = parse_chapter_tree(timeline, str(home.url))
+            if chapters:
+                return chapters
+            # 容器存在但一行都没有 → 该课程尚未发布章节，属正常空状态
+            return []
+    except Exception as exc:  # noqa: BLE001 - 形态 0 失败则回退菜单查找
+        log.debug("课程主页章节树获取失败，回退菜单方式: %s", exc)
 
     last_err: Exception | None = None
     for keyword in ("章节", "目录", "任务", "学习"):
@@ -167,7 +254,8 @@ def list_chapters(sess: ChaoxingSession, course: dict[str, Any]) -> list[dict[st
             return chapters
 
     raise UpstreamChanged(
-        "章节树解析失败：新版模板的章节由前端 JS 动态加载，纯 HTTP 拿不到。"
-        "可在浏览器 F12 的 Network 面板找到章节列表的 XHR 端点后扩展 api/chapters.py。"
+        "章节树解析失败：课程主页没有 .timeline 容器，且菜单里的章节页也未渲染出章节行。"
+        "可能该课程把『章节/目录』菜单隐藏了，或模板再次改版——"
+        "请在浏览器 F12 里确认章节列表的来源（页面内嵌 or XHR），再扩展 api/chapters.py。"
         f"（最后一次菜单查找错误: {last_err}）"
     )

@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from ..exceptions import UpstreamChanged
 from ..session import ChaoxingSession
 from .chapters import find_menu_url
+from .pagestate import is_empty_page
 
 
 def list_exams(sess: ChaoxingSession, course: dict[str, Any]) -> list[dict[str, Any]]:
@@ -33,6 +34,8 @@ def list_exams(sess: ChaoxingSession, course: dict[str, Any]) -> list[dict[str, 
             }
         )
     if not rows:
+        if is_empty_page(soup):
+            return rows  # 页面明示『暂无内容』：确实没布置考试
         raise UpstreamChanged("考试列表页解析为空")
     return rows
 

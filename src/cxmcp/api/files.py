@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from ..exceptions import UpstreamChanged
 from ..session import ChaoxingSession
 from .chapters import find_menu_url
+from .pagestate import is_empty_page
 
 
 def list_materials(sess: ChaoxingSession, course: dict[str, Any]) -> list[dict[str, Any]]:
@@ -73,6 +74,8 @@ def list_materials(sess: ChaoxingSession, course: dict[str, Any]) -> list[dict[s
         for m in re.finditer(r"objectid=([a-f0-9]{32})", resp.text):
             items.append({"name": "", "objectId": m.group(1), "url": ""})
     if not items:
+        if is_empty_page(soup):
+            return items  # 页面明示『暂无内容』：老师还没上传资料
         raise UpstreamChanged("资料页未解析到文件项")
     return items
 

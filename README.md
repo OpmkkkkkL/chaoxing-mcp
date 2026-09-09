@@ -69,8 +69,11 @@ cx-mcp-student --help       # 验证入口
 
 ## 实机校准（重要）
 
-本仓库协议实现基于参考项目的公开逆向知识 + mock 单测（23 个，全绿），
-**未在真实学习通账号上验证**。上线前请先跑：
+本仓库协议实现基于参考项目的公开逆向知识 + mock 单测（36 个，全绿）。
+2026-09-09 已在真实账号（学生，17 门课）上跑通：`cx_login`/Cookie 导入、
+`cx_list_courses`、作业/考试/章节列表均返回真实数据。
+
+上线前可先跑：
 
 ```bash
 python smoke_test.py login --role student --username 手机号 --password 密码
@@ -78,6 +81,26 @@ python smoke_test.py login --role student --username 手机号 --password 密码
 
 登录与课程列表属高确定性端点；签到/成绩/通知/上传/自动化端点随平台模板变动，
 失败时会返回**候选端点探测记录**，按记录抓包更新 `src/cxmcp/api/` 中对应 URL 即可。
+
+### 『没有内容』不等于『模板改版』
+
+列表类接口一律遵循：先按模板选择器取行，取到 0 行时用
+`api/pagestate.is_empty_page()` 判别页面是否明示空状态
+（`暂无内容 / 暂无数据 / 尚未发布 …`），是则返回空列表，只有两者都不成立才抛
+`UpstreamChanged`。此前作业/考试/资料页在没布置任务时会误报"模板可能改版"，
+把调用方引去追一个不存在的 bug。
+
+章节树同理：新版课程主页（`stucoursemiddle` 302 后的
+`/mooc-ans/mycourse/studentcourse`）把章节**服务端渲染**在
+`<div class="timeline">` 里，`levelone/leveltwo/levelthree` 三层，
+`chapterId` 从链接里取。容器存在但为空（只剩 `<!-- 第一级开始 -->` 注释）
+= 老师尚未发布章节，返回 `[]`。
+
+## 批量调用的节流
+
+学习通对高频请求会跳 `antispiderShowVerify.ac` 风控。串行遍历多门课时
+**每次调用之间留 3~5 秒**；一旦返回 `risk_control_paused` 就停手，
+不要重试硬闯（需人工在浏览器过一次验证或重导 Cookie）。
 
 ## 开发
 
