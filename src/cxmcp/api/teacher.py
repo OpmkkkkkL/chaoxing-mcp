@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from ..exceptions import UpstreamChanged
 from ..session import ChaoxingSession
 from .chapters import find_menu_url
+from .pagestate import is_empty_page
 
 
 # ------------------------------------------------------------------ 成绩
@@ -27,6 +28,8 @@ def get_gradebook(sess: ChaoxingSession, course: dict[str, Any]) -> dict[str, An
         if len(cells) >= 2:
             students.append({"cells": cells[:8]})
     if not students:
+        if is_empty_page(soup):
+            return {"students": [], "url": url, "empty": True}
         raise UpstreamChanged("成绩页未解析到数据行")
     return {"students": students, "url": url}
 

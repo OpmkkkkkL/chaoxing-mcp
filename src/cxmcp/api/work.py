@@ -19,6 +19,7 @@ from bs4 import BeautifulSoup
 
 from ..exceptions import UpstreamChanged
 from ..session import ChaoxingSession
+from .pagestate import is_empty_page
 
 MOOC1_2 = "https://mooc1-2.chaoxing.com"
 MOOC_ANS = "https://mooc1.chaoxing.com/mooc-ans"
@@ -83,6 +84,8 @@ def list_homeworks(sess: ChaoxingSession, course: dict[str, Any]) -> list[dict[s
                     }
                 )
     if not rows:
+        if is_empty_page(soup):
+            return rows  # 页面明示『暂无内容』：真的没布置作业，不是改版
         raise UpstreamChanged("作业列表页解析为空（模板可能改版）")
     return rows
 
